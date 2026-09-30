@@ -74,14 +74,14 @@ env:
   # (~22 KB) carry the canonical findings: SQL injection (login.ts,
   # search.ts), XXE / Zip-Slip / YAML-DoS (fileUpload.ts), server-side
   # template injection + eval (userProfile.ts), path traversal (dataErasure.ts).
-  SCAN_FILES: "login.ts search.ts fileUpload.ts userProfile.ts dataErasure.ts"
+  SCAN_FILES: "login.ts"
   # The `cm` binary ships vendored in the repo, so template copies work with
   # zero extra setup (GitHub does NOT copy Releases on fork/template — a
   # release-download step here broke every student copy).
   CM_BUNDLED: lab/bin/cm-linux
   # How many of the top-ranked HIGH/CRITICAL findings to auto-remediate in one
   # run (all land in a single PR). Set to 1 for a minimal single-fix lab.
-  CM_FIX_LIMIT: "3"
+  CM_FIX_LIMIT: "1"
 
 jobs:
   codemender-security:
@@ -195,7 +195,18 @@ jobs:
         run: |
           set -uo pipefail
           echo "Scanning '$SCAN_PATH' — files: $SCAN_FILES (in-scope source is uploaded to Google's CodeMender service)..."
-          cm find "$SCAN_PATH" -y 2>&1 | tee "$RUNNER_TEMP/cm-find.cm.log"
+          for ATTEMPT in 1 2 3; do
+            echo "=== cm find attempt $ATTEMPT/3 ==="
+            if cm find "$SCAN_PATH" -y 2>&1 | tee "$RUNNER_TEMP/cm-find.cm.log"; then
+              break
+            fi
+            if [ "$ATTEMPT" -lt 3 ]; then
+              echo "::warning::cm find attempt $ATTEMPT hit transient error/quota; retrying in 20s..."
+              sleep 20
+            else
+              exit 1
+            fi
+          done
 
       - name: Export Security Report (cm report -f json)
         if: ${{ always() && steps.scan.conclusion != 'skipped' }}
@@ -228,20 +239,15 @@ jobs:
           echo "Remediating top finding(s): ${{ steps.triage.outputs.fix_ids }}"
           for FID in ${{ steps.triage.outputs.fix_ids }}; do
             echo "::group::cm fix $FID"
-            # Run cm from INSIDE $SCAN_PATH. cm records each finding's path
-            # relative to the scan root it was found under — usually a bare
-            # basename ("search.ts") — but `cm fix` stats that path against the
-            # process CWD. From the repo root that resolves to ./search.ts,
-            # which doesn't exist, and cm dies in milliseconds with
-            #   Error: acquiring write lock on search.ts: stat search.ts: ...
-            # producing no patch and therefore an empty remediation PR branch.
-            # cd'ing in makes the relative form resolve; findings that stored an
-            # absolute path instead (cm is inconsistent) work either way.
-            # --bypass-warning: cm 0.2.0's responsibility warning must be
-            # acknowledged interactively once per machine; CI runners are
-            # fresh every run, so the session dies before fixing without it.
-            ( cd "$SCAN_PATH" && cm fix "$FID" -y --bypass-warning ) 2>&1 \
-              | tee "$RUNNER_TEMP/fix-$FID.cm.log" || true
+            for FIX_ATTEMPT in 1 2 3; do
+              ( cd "$SCAN_PATH" && cm fix "$FID" -y --bypass-warning ) 2>&1 \
+                | tee "$RUNNER_TEMP/fix-$FID.cm.log" || true
+              if ! grep -q "code 429" "$RUNNER_TEMP/fix-$FID.cm.log"; then
+                break
+              fi
+              echo "::warning::cm fix attempt $FIX_ATTEMPT hit 429 quota; retrying in 20s..."
+              sleep 20
+            done
             # Surface a path-resolution failure on its own — otherwise it is
             # indistinguishable from success in the "no clean diff" branch below.
             if grep -q "acquiring write lock" "$RUNNER_TEMP/fix-$FID.cm.log"; then
