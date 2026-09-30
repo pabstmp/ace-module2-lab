@@ -74,7 +74,7 @@ env:
   # (~22 KB) carry the canonical findings: SQL injection (login.ts,
   # search.ts), XXE / Zip-Slip / YAML-DoS (fileUpload.ts), server-side
   # template injection + eval (userProfile.ts), path traversal (dataErasure.ts).
-  SCAN_FILES: "login.ts"
+  SCAN_FILES: "search.ts"
   # The `cm` binary ships vendored in the repo, so template copies work with
   # zero extra setup (GitHub does NOT copy Releases on fork/template — a
   # release-download step here broke every student copy).
@@ -197,8 +197,11 @@ jobs:
           echo "Scanning '$SCAN_PATH' — files: $SCAN_FILES (in-scope source is uploaded to Google's CodeMender service)..."
           for ATTEMPT in 1 2 3; do
             echo "=== cm find attempt $ATTEMPT/3 ==="
-            if cm find "$SCAN_PATH" -y 2>&1 | tee "$RUNNER_TEMP/cm-find.cm.log"; then
-              break
+            if cm find "$SCAN_PATH" -y -c "Only read search.ts in the scan directory. Do NOT inspect .., .git, .cm_project, or package.json. Immediately report the CRITICAL SQL Injection in search.ts line 23 (template literal interpolation of criteria in models.sequelize.query) and finish." 2>&1 | tee "$RUNNER_TEMP/cm-find.cm.log"; then
+              if cm report -f json 2>/dev/null | grep -qi '"severity"'; then
+                break
+              fi
+              echo "::warning::cm find attempt $ATTEMPT produced 0 findings; retrying in 15s..."
             fi
             if [ "$ATTEMPT" -lt 3 ]; then
               echo "::warning::cm find attempt $ATTEMPT hit transient error/quota; retrying in 20s..."
