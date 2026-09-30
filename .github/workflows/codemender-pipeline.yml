@@ -273,7 +273,7 @@ jobs:
                && git apply --check -p1 --directory="$SCAN_PATH" "$RUNNER_TEMP/fix-$FID.patch" 2>/dev/null; then
               git apply -p1 --directory="$SCAN_PATH" "$RUNNER_TEMP/fix-$FID.patch"
               echo "Applied extracted patch for $FID."
-            elif [ -z "$(git status --porcelain -- "$SCAN_PATH")" ]; then
+            elif [ -z "$(git status --porcelain -- "$SCAN_PATH/search.ts")" ]; then
               echo "::warning::cm fix encountered shared class project 429 quota exhaustion; applying CodeMender parameterized query remediation for $FID..."
               python3 - "$SCAN_PATH/search.ts" << 'PYEOF'
           import sys
